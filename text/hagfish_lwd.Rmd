@@ -1,0 +1,185 @@
+---
+title: "Hagfish length, weight, diameter relationships"
+author: "Ben Williams"
+date: "January 17, 2019"
+output:
+  bookdown::html_document2: 
+  fig_caption: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r}
+source('code/helper.r')
+options(scipen = 999)
+hag <- read_csv('data/hag_lwd.csv')
+```
+
+## Questions {-}
+
+ - calculate the diameter of a hagfish based upon length and weight,
+ - calculate the hole size that a hagfish can squeeze through.
+ 
+
+## Exploratory data analysis {-}
+
+First a couple of basic examinations of the data.
+
+```{r lw, fig.align='center', fig.cap='Hagfish length-weight measurements.'}
+hag %>% 
+  ggplot(aes(length, weight)) + geom_point() +
+  expand_limits(x = 0, y = 0) +
+  xlab('\nLength (cm)') + 
+  ylab('Weight (g)\n') +
+  stat_smooth()
+```
+
+```{r ld, fig.align='center', fig.cap='Hagfish length-diameter measurements.'}
+hag %>% 
+  ggplot(aes(length, diameter)) + geom_point() +
+  expand_limits(x = 0, y = 0) +
+  xlab('\nLength (cm)') + 
+  ylab('Diameter (cm)\n') +
+  stat_smooth()
+```
+
+```{r wd, fig.align='center', fig.cap='Hagfish weight-diameter measurements.'}
+hag %>% 
+  ggplot(aes(weight, diameter)) + geom_point() +
+  expand_limits(x = 0, y = 0) +
+  xlab('\nWeight (g)') + 
+  ylab('Diameter (cm)\n') +
+  stat_smooth()
+
+```
+
+
+## Models {-}
+
+A suite of models were examined to explore diameter ~ length/weight relationships.
+Generalized additive models and generalized linear models with and without interaction and/or log links were examined.
+
+```{r, echo = T}
+gam_l <- gam(diameter ~ s(length, k=4), data = hag, gamma = 1.4, method='ML')
+gam_w <- gam(diameter ~ s(weight, k=4), data = hag, gamma = 1.4, method='ML')
+gam_lw <- gam(diameter ~ s(length, k=4) + s(weight, k=4), data = hag, gamma = 1.4, method='ML')
+gam_llw <- gam(diameter ~ s(length, k=4) + s(weight, k=4), data = hag, gamma = 1.4, method='ML', family = gaussian(link = 'log'))
+
+
+glm_l <- glm(diameter ~ length, data = hag)
+glm_w <- glm(diameter ~ weight, data = hag)
+glm_lw <- glm(diameter ~ length * weight, data = hag)
+glm_llw <- glm(diameter ~ length * weight, data = hag, family = gaussian(link = 'log'))
+```
+
+AIC was used to test for the top model.
+
+```{r}
+AIC(gam_l, gam_w, gam_lw, gam_llw, glm_l, glm_w, glm_lw, glm_llw)
+```
+
+
+The top model is the glm with an interaction term between length and weight (glm_lw). 
+Summary of model results.
+
+```{r}
+summary(glm_lw)
+```
+
+Plots of model results
+
+```{r}
+plot(glm_lw)
+```
+
+# Comparisons {-}
+
+Compare best fit model to the Harada estimate. 
+This was explored by examining model residuals by length and weight.
+
+```{r, fig.align='center', fig.cap='Hagfish model residuals by weight.'}
+hag %>% 
+  mutate(pred = fitted(glm_lw),
+         harada = (length * 0.155 + 0.049) / 3.1416,
+         resid = diameter - pred,
+         resid_ha = diameter - harada) %>% 
+  gather(variable, resid, -length, -weight, -diameter, -pred, -harada) %>% 
+  ggplot(aes(weight, resid, color = variable, fill = variable )) + 
+  geom_point() +
+  geom_hline(yintercept=0, lty = 3) +
+  stat_smooth(alpha = .2)
+```
+
+
+```{r, fig.align='center', fig.cap='Hagfish model residuals by length'}
+hag %>% 
+  mutate(pred = fitted(glm_lw),
+         harada = (length * 0.155 + 0.049) / 3.1416,
+         resid = diameter - pred,
+         resid_ha = diameter - harada) %>% 
+  gather(variable, resid, -length, -weight, -diameter, -pred, -harada) %>% 
+  ggplot(aes(length, resid, color = variable, fill = variable )) + 
+  geom_point() +
+  geom_hline(yintercept=0, lty = 3) +
+  stat_smooth(alpha = .2)
+```
+
+These show that the Harada parameter estimates do a poor job at ~ length 50, and are strongly biased when compared via weight. The best fit model does a good job of describing the output.
+
+
+
+```{r, fig.align='center', fig.cap="Observed and predicted hagfish diameters"}
+hag %>% 
+  mutate(pred = fitted(glm_lw)) %>% 
+  ggplot(aes(length, diameter)) + geom_point() +
+  geom_point(aes(length, pred), color = 2)
+```
+
+The coefficent estimates can now be used as predictors for future samples
+
+```{r}
+length = seq(20, 60, by = 5)
+weight = seq(50, 450, by = 50)
+
+coef(glm_lw)[[1]] + coef(glm_lw)[[2]] * length + coef(glm_lw)[[3]] * weight + coef(glm_lw)[[4]] * length * weight
+```
+
+In short it appears that you should be able to use length/weight to get a reasonable estimate of diameter. 
+This of course assumes that the sampling was distributed both in space and time - if not you will want to do some additional sampling to beef up this analysis.
+
+# Escape size {-}
+
+To determine escape size I worked up a function that predicts the L50 based upon 3 inputs:
+ - shrink = the amount a hagfish is estimated to reduce in size (e.g,. 0.15) to fit through an opening
+ - target_size = the target diameter size (cm)
+ - prob = the probability e.g., (0.50 for 50%)
+
+```{r, echo = T}
+
+length_caught <- function(shrink, target_size, prob) {
+  
+  hag %>%
+    mutate(dia = diameter / (1 + shrink),
+         catch = factor(ifelse(dia > target_size, 1, 0))) -> df 
+  
+    model = glm(catch ~ length, family = 'binomial', data = df)
+
+    t = round((log(prob / (1 - prob)) - coef(model)[1]) / coef(model)[2])
+  
+    df %>% 
+      mutate(pred = predict(model, ., type ='response')) %>% 
+      ggplot(aes(length, pred)) + geom_point() +
+      ggtitle(paste0('L50 = ', t, 'cm'))
+}
+
+
+length_caught(0.15,  2.0, 0.5)
+```
+
+The length that 50% of the hagfish will be retained is reported at the top of the figure. 
+The values can be adjusted in case you think that a hagfish can reduce in size by 20% etc.
+
+
+
