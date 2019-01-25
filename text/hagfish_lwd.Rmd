@@ -1,9 +1,9 @@
 ---
 title: "Hagfish length, weight, diameter relationships"
-author: "Ben Williams"
-date: "January 17, 2019"
+author: "Ben Williams, Jane Sullivan"
+date: "January 24, 2019"
 output:
-  bookdown::html_document2: 
+  bookdown::pdf_document2: 
   fig_caption: true
 ---
 
@@ -13,6 +13,7 @@ knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE)
 
 ```{r}
 source('code/helper.r')
+library(knitr)
 options(scipen = 999)
 hag <- read_csv('data/hag_lwd.csv')
 ```
@@ -72,12 +73,14 @@ glm_l <- glm(diameter ~ length, data = hag)
 glm_w <- glm(diameter ~ weight, data = hag)
 glm_lw <- glm(diameter ~ length * weight, data = hag)
 glm_llw <- glm(diameter ~ length * weight, data = hag, family = gaussian(link = 'log'))
+
+null_lm <- lm(diameter ~ length, data = hag)
 ```
 
 AIC was used to test for the top model.
 
 ```{r}
-AIC(gam_l, gam_w, gam_lw, gam_llw, glm_l, glm_w, glm_lw, glm_llw)
+AIC(gam_l, gam_w, gam_lw, gam_llw, glm_l, glm_w, glm_lw, glm_llw, null_lm)
 ```
 
 
@@ -96,16 +99,18 @@ plot(glm_lw)
 
 # Comparisons {-}
 
-Compare best fit model to the Harada estimate. 
-This was explored by examining model residuals by length and weight.
+Compare best fit model to the Harada estimate (a linear model) and a linear model using ADFG data. This was explored by examining model residuals by length and weight.
 
 ```{r, fig.align='center', fig.cap='Hagfish model residuals by weight.'}
 hag %>% 
-  mutate(pred = fitted(glm_lw),
-         harada = (length * 0.155 + 0.049) / 3.1416,
-         resid = diameter - pred,
-         resid_ha = diameter - harada) %>% 
-  gather(variable, resid, -length, -weight, -diameter, -pred, -harada) %>% 
+  mutate(adfg_best_model = fitted(glm_lw),
+         harada_linear = (length * 0.155 + 0.049) / 3.1416,
+         # linear model using our data
+         adfg_linear = fitted(null_lm),
+         resid_best = diameter - adfg_best_model,
+         resid_harada_linear = diameter - harada_linear,
+         resid_linear = diameter - adfg_linear) %>% 
+  gather(variable, resid, -length, -weight, -diameter, -adfg_best_model, -harada_linear, - adfg_linear) %>% 
   ggplot(aes(weight, resid, color = variable, fill = variable )) + 
   geom_point() +
   geom_hline(yintercept=0, lty = 3) +
@@ -115,35 +120,43 @@ hag %>%
 
 ```{r, fig.align='center', fig.cap='Hagfish model residuals by length'}
 hag %>% 
-  mutate(pred = fitted(glm_lw),
-         harada = (length * 0.155 + 0.049) / 3.1416,
-         resid = diameter - pred,
-         resid_ha = diameter - harada) %>% 
-  gather(variable, resid, -length, -weight, -diameter, -pred, -harada) %>% 
+  mutate(adfg_best_model = fitted(glm_lw),
+         harada_linear = (length * 0.155 + 0.049) / 3.1416,
+         # linear model using our data
+         adfg_linear = fitted(null_lm),
+         resid_best = diameter - adfg_best_model,
+         resid_harada_linear = diameter - harada_linear,
+         resid_linear = diameter - adfg_linear) %>% 
+  gather(variable, resid, -length, -weight, -diameter, -adfg_best_model, -harada_linear, - adfg_linear) %>% 
   ggplot(aes(length, resid, color = variable, fill = variable )) + 
   geom_point() +
   geom_hline(yintercept=0, lty = 3) +
   stat_smooth(alpha = .2)
 ```
 
-These show that the Harada parameter estimates do a poor job at ~ length 50, and are strongly biased when compared via weight. The best fit model does a good job of describing the output.
+These show that the Harada parameter estimates do a poor job at lengths > 50, and are strongly biased when compared via weight. The best fit model does a good job of describing the output.
 
 
 
 ```{r, fig.align='center', fig.cap="Observed and predicted hagfish diameters"}
 hag %>% 
   mutate(pred = fitted(glm_lw)) %>% 
-  ggplot(aes(length, diameter)) + geom_point() +
-  geom_point(aes(length, pred), color = 2)
+  ggplot(aes(length, diameter)) + 
+  geom_point() +
+  geom_point(aes(length, pred), color = 2, shape = 1)
 ```
 
 The coefficent estimates can now be used as predictors for future samples
 
-```{r}
+```{r, echo = T}
 length = seq(20, 60, by = 5)
+length = 20
+weight = 20
 weight = seq(50, 450, by = 50)
 
 coef(glm_lw)[[1]] + coef(glm_lw)[[2]] * length + coef(glm_lw)[[3]] * weight + coef(glm_lw)[[4]] * length * weight
+
+summary(glm_lw)
 ```
 
 In short it appears that you should be able to use length/weight to get a reasonable estimate of diameter. 
@@ -151,18 +164,20 @@ This of course assumes that the sampling was distributed both in space and time 
 
 # Escape size {-}
 
-To determine escape size I worked up a function that predicts the L50 based upon 3 inputs:
- - shrink = the amount a hagfish is estimated to reduce in size (e.g,. 0.15) to fit through an opening
- - target_size = the target diameter size (cm)
- - prob = the probability e.g., (0.50 for 50%)
+To determine escape size I worked up a function that predicts the $L_{50}$ based upon 3 inputs:
+
+-   shrink = the amount a hagfish is estimated to reduce in size (e.g,. 0.15 is assuming a shrinkage of 15%) to fit through an opening
+-   escape_size = escape hole diameter (cm)
+-   prob = the probability e.g., (0.50 for 50%)
 
 ```{r, echo = T}
 
-length_caught <- function(shrink, target_size, prob) {
+length_caught <- function(
+  shrink, escape_size, prob) {
   
   hag %>%
     mutate(dia = diameter / (1 + shrink),
-         catch = factor(ifelse(dia > target_size, 1, 0))) -> df 
+           catch = factor(ifelse(dia > escape_size, 1, 0))) -> df 
   
     model = glm(catch ~ length, family = 'binomial', data = df)
 
@@ -171,15 +186,92 @@ length_caught <- function(shrink, target_size, prob) {
     df %>% 
       mutate(pred = predict(model, ., type ='response')) %>% 
       ggplot(aes(length, pred)) + geom_point() +
-      ggtitle(paste0('L50 = ', t, 'cm'))
+      ggtitle(paste0('L', prob*100, ' = ', t, ' cm'))
 }
 
-
-length_caught(0.15,  2.0, 0.5)
+length_caught(0.15, 1.9, 0.50)
 ```
 
 The length that 50% of the hagfish will be retained is reported at the top of the figure. 
 The values can be adjusted in case you think that a hagfish can reduce in size by 20% etc.
 
+## Alternative method to get escape size {-}
+
+You could also use $L_{50}$ (or some other reference point) from a maturity curve to determine an optimal escape hole size. Similar to above, this method is based on the estimated shrink, and the probability that you want to base the output on (defaults to 50%). In addition, you put in the $L_{50}$ that is estimated externally from a maturity curve.
+
+```{r, echo = T}
+
+myL50 <- 45 # user input! waiting for the estimated L50 from from Andrew.
+
+f_len_caught <- function(escape_size = 1.9, 
+                         shrink = 0.15,
+                         prob = 0.5,  
+                         target_length = myL50) {
+  hag %>% mutate(dia = diameter / (1 + shrink),
+                 catch = factor(ifelse(dia > escape_size, 1, 0))) -> df 
+  model <- glm(catch ~ length, family = 'binomial', data = df)
+  len <- round((log(prob / (1 - prob)) - coef(model)[1]) / coef(model)[2])
+  out <- len - target_length # ultimately we want the difference between predicted len and target length to be 0
+  return(out)
+}
+
+# Finds the escape ring size between the interval provided that gives us a 50% probability of releasing our 50% probability of being mature fish
+fit <- uniroot(f = f_len_caught, interval = c(0.9,2.5))
+optim_escape <- round(fit$root,1)
+
+```
+
+For example, given that the length at 50% maturity ($L_{50}$) is `r round(myL50)` cm, the optimal escape hole size that results in a 50% probability of retention for $L_{50}$ is `r optim_escape` cm.
+
+## Length predictions from the Harada model for comparison {-}
+
+As requested by Aaron, this function uses the paramter estimates for the logistic curve and linear regression from Harada et al. 2007 to output the length at which some proportion of fish (e.g. 50%) are retained given an escape hole size. The output is the length (cm) at which (prob, %) fish are retained by the gear given an escape hole size from the Harada model. Recall that the Harada model is based on relative girth, so length must be derived from the length/girth regression.
+
+```{r harada, echo = T}
+
+predict_harada <- function(
+  # Probability from 0 to 1
+  prob = 0.75,
+  # Escape hole diameter (cm)
+  escape_size = 1.9,
+  # Logistic parameter estimates from Table 2 in Harada et al 2007
+  logistic_alpha = -13.34,
+  logistic_beta = 10.99,
+  #length/girth linear regression estimates from Harada. Could use parameter
+  #estimates from our best-fitting model instead.
+  linreg_b0 = 4.213, # y-intercept
+  linreg_b1 = 5.487 # slope
+) {
+# Relative girth (R) predicted by the model
+R <- (log(prob/(1-prob))-logistic_alpha)/logistic_beta
+# Girth (G) predicted by the model (adjusted by escape hole perimeter, which is diameter * pi)
+G <- R * escape_size * pi
+# Length predicted by the model using the length/girth linear regression estimates
+L <- linreg_b0 + linreg_b1 * G
+return(round(L,2))
+}
+```
 
 
+For example, we can use this function to get the predicted lengths given some probability of retention and escape hole size:
+
+```{r test_harada, echo = T}
+prob_vec <- c(0.1, 0.25, 0.5, 0.75, 0.9)
+escape_vec <- c(1.6, 1.9)
+
+out <- matrix(nrow = length(prob_vec), ncol = length(escape_vec))
+
+for(i in 1:length(prob_vec)){
+  for(j in 1:length(escape_vec)){
+out[i,j] <- predict_harada(prob = prob_vec[i], escape_size = escape_vec[j])
+  }
+}
+
+out <- as.data.frame(out, row.names = FALSE)
+names(out) <- paste0(escape_vec, " cm")
+out %>% 
+  mutate(Probability = prob_vec) %>% 
+  select(Probability, `1.6 cm`, `1.9 cm`) -> out
+```
+
+`r kable(out)`

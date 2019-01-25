@@ -1,0 +1,12 @@
+# R projects
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+*.Rdata
+
+# other file types we don't want to track
+*.xlsx
+*.xlsm
+*.docx
